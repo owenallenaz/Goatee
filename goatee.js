@@ -143,41 +143,6 @@ goatee = (function() {
 		}
 		
 		return returnArray.join("");
-		
-		while(true) {
-			matches = returnHTML.match(/\{\{(%?)(\w*?)\}\}/);
-			
-			if (matches == null) {
-				break;
-			}
-			
-			value = "";
-			if (typeof data[matches[2]] == "undefined") {
-				value = "";
-			} else if (typeof data[matches[2]] == "string" || typeof data[matches[2]] == "number") {
-				/*** standard tags ***/
-				value = data[matches[2]];
-			} else if (typeof data[matches[2]].template != "undefined" && typeof data[matches[2]].data != "undefined") {
-				/*** passing a template and data structure ***/
-				
-				/*** Is array loop over array ***/
-				if (data[matches[2]].data instanceof Array) {
-					for(var i = 0; i < data[matches[2]].data.length; i++) {
-						value += fill(data[matches[2]].template, data[matches[2]].data[i]);
-					}
-				} else {
-					value = fill(data[matches[2]].template, data[matches[2]].data);
-				}
-			}
-			
-			if (matches[1] == "%") {
-				value = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-			}
-			
-			returnHTML = returnHTML.replace(new RegExp(matches[0], "g"), value);	
-		}
-		
-		return returnHTML;
 	};
 	
 	/*** Cross browser way to test if an object has no keys ***/
