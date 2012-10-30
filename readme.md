@@ -34,7 +34,8 @@ Examples given using JS syntax, it is recommended to store your templates in var
 Variables can be used in 2 ways.
 
 1. If the the variable exists in the data object, and is a simple value (string, integer, boolean), it will be filled in with the value of it. If the variable does not exist, the tag is stripped.
-2. (NEW) If the the variable exists in the data object and is a structure with a "template" and "data" key, then it will fill the `{{var}}` with the product of that template and that data.
+2. If the the variable exists in the data object and is a structure with a "template" and "data" key, then it will fill the `{{var}}` with the product of that template and that data.
+3. You can use {{%var}} to HTML escape a variable.
 
 ````
 	template:
@@ -51,6 +52,7 @@ Variables can be used in 2 ways.
 	template:
 	<h1>{{title}}</h1>
 	{{extra}}
+	{{%escaped}}
 	
 	data:
 	{
@@ -60,12 +62,14 @@ Variables can be used in 2 ways.
 			data : {
 				subtitle : "My subtitle"
 			}
-		}
+		},
+		escaped : "<div>"
 	}
 	
 	result:
 	<h1>This is my title</h1>
 	<h2>My subtitle</h2>
+	&lt;div&gt;
 ````
 
 The ability to pass a template and a data structure is key to making Goatee awesome. This way, we never have to pre-process any content before it reaches the final template. In addition, it allows a limitless amount of data/templates to be used in any context. In the mustache paradigm you must know AHEAD OF TIME, what templates may fill a specific spot.
@@ -197,6 +201,40 @@ There are 2 different ways that sections are processed.
 	result:
 	empty string
 ````
+
+### Negative Section- {{-}} content {{/-}}
+Negative sections allow you to access variables in the context above your current context. In example if your template has a section, while in the section, you can access variables in the scope above using a negative section.
+
+````
+	template:
+	{{#items}}
+		<div class="item {{-}}{{parentclass}}{{/-}}">
+			<h1>{{title}}</h1>
+			<h2>{{subtitle}}</h2>
+		</div>
+	{{/items}}
+	
+	data:
+	{
+		parentclass : "myClass",
+		items : [
+			{ title : "First", subtitle : "Sub First" },
+			{ title : "Second", subtitle : "Sub Second" }
+		]
+	}
+	
+	result:
+	<div class="item myClass">
+		<h1>First</h1>
+		<h2>Sub First</h2>
+	</div>
+	<div class="item myClass">
+		<h1>Second</h1>
+		<h2>Sub Second</h2>
+	</div>
+````
+
+As you can see in the above example, the parentclass variable is not within the scope of an "item", but it is still accessible using a negative section {{-}}
 
 Preserving Templates
 -

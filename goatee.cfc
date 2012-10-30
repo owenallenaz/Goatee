@@ -1,110 +1,163 @@
+<!--- This is the templating engine derived from Mustache. It is usable anywhere, in any context, all it does is merge data into HTML --->
 <cfcomponent>
 	<cffunction name="init">
+		<cfset variables.tagRegex = CreateObject("java", "java.util.regex.Pattern").compile("\{\{([##!:%\/-]?)(.*?)\}\}", 32)>
+
 		<cfreturn this>
 	</cffunction>
 	
-	<!--- Templating entry point function, this functions merges a template with it's data --->
+	<!--- Templating entry point function, this functions merges a mustache template with it's data --->
 	<cffunction name="fill" access="public" output="no">
-		<cfargument name="html">
-		<cfargument name="data">
+		<cfargument name="html" type="string" default="">
+		<cfargument name="data" type="struct" default="#StructNew()#">
 		
-		<cfset local.return = arguments.html>
-		
-		<!--- This adds a _\d identify to all tags, this allows us to properly process nested sections with the same name inside of each other --->
-		<!--- Example: {{:test6}}<span>{{#test6}}{{test6}}{{/test6}}</span>{{/test6}} --->
-		<cfset local.tagRegex = CreateObject("java", "java.util.regex.Pattern").compile("\{\{(##|!|:|\/)(.*?)\}\}", 32)>
-		<cfset local.matcher = local.tagRegex.matcher(local.return)>
-		<cfset local.tags = ArrayNew(1)>
-		<cfset local.index = 1>
+		<!--- 
+			This processes the templates and compiles them in a manner so that they become structs and arrays with positional indices of all of the template tags
+			This allows us to process a template without doing regex/replace over and over and over. This creates a set of nested structures called the "context".
+			Each struct contains an array of all of the tags it contains. In the regex loop we an array of contexts and pass up and down the context chain. This
+			allows us to calculate once the start and end of each tag. So that iterations of it can just use stored values. This very closely mimics the construction
+			seen on mustache.js.
+		--->
+		<cfset local.matcher = variables.tagRegex.matcher(arguments.html)>
+		<cfset local.context = {
+			tags = [],
+			start = 1,
+			inner = arguments.html,
+			innerStart = 1,
+			innerEnd = len(arguments.html) + 1,
+			end = len(arguments.html) + 1
+		}>
+		<cfset local.myContext = local.context>
+		<cfset local.previousContext = []>
 		<cfloop condition="#local.matcher.find()#">
-			<cfset local.value = "">
-			
-			<cfif ListFindNoCase("##,:,!", local.matcher.group(1))>
-				<cfset ArrayAppend(local.tags, { label = local.matcher.group(2), index = local.index})>
-				<cfset local.return = Replace(local.return, local.matcher.group(0), Replace(local.matcher.group(0), "}}", "_#local.index#}}"))>
-				<cfset local.index++>
-			<cfelseif local.matcher.group(1) is "/">
-				<cfset local.lastValue = local.tags[ArrayLen(local.tags)].index>
-				<cfset ArrayDeleteAt(local.tags, ArrayLen(local.tags))>
-				<cfset local.return = Replace(local.return, local.matcher.group(0), Replace(local.matcher.group(0), "}}", "_#local.lastValue#}}"))>
+			<cfif local.matcher.group(1) is not "/">
+				<cfset ArrayAppend(local.myContext.tags, { label = local.matcher.group(2), type = local.matcher.group(1), start = local.matcher.start() + 1, end = local.matcher.end() + 1, innerStart = local.matcher.end() + 1, innerEnd = "", inner = "", tags = [] })>
+				
+				<!--- for sections we need to alter the context --->
+				<cfif local.matcher.group(1) is not "" && local.matcher.group(1) is not "%">
+					<cfset ArrayAppend(local.previousContext, local.myContext)>
+					<cfset local.myContext = local.myContext.tags[ArrayLen(local.myContext.tags)]>
+				</cfif>
+			<cfelse>
+				<cfset local.myContext.end = local.matcher.end() + 1>
+				<cfset local.myContext.innerEnd = local.matcher.start() + 1>
+				<cfset local.myContext.inner = Mid(arguments.html, local.myContext.innerStart, local.myContext.innerEnd - local.myContext.innerStart)>
+				<cfset local.myContext = local.previousContext[ArrayLen(local.previousContext)]>
+				<cfset ArrayDeleteAt(local.previousContext, ArrayLen(local.previousContext))>
 			</cfif>
 		</cfloop>
-		
-		<cfreturn processTags(local.return, arguments.data)>
+
+
+		<cfreturn processTags(arguments.html, local.context, [ arguments.data ])>
 	</cffunction>
 
 	<!--- Private function, used for nested loops and recursion --->
-	<cffunction name="processTags" access="private" output="no">
+	<cffunction name="processTags" access="private">
 		<cfargument name="html">
+		<cfargument name="context">
 		<cfargument name="data">
-		<cfset local.return = arguments.html>
+
+		<!--- using an array and concatenating to a list is faster than string appending, at the end we ArrayToList() for max performance --->
+		<cfset local.return = []>
 		
-		<!--- Processes all sections --->
-		<cfset local.tagRegex = CreateObject("java", "java.util.regex.Pattern").compile("\{\{(##|!|:)(.*?)_(\d*?)\}\}(.*?)\{\{\/\2_\3\}\}", 32)>
-		<cfset local.matcher = local.tagRegex.matcher(local.return)>
-		
-		<cfloop condition="#local.matcher.find()#">
-			<cfset local.value = "">
-		
-			<cfif local.matcher.group(1) is "##" && StructKeyExists(arguments.data, local.matcher.group(2))>
-				<cfif IsArray(arguments.data[local.matcher.group(2)])>
-					<cfloop array="#arguments.data[local.matcher.group(2)]#" index="local.i">
-						<cfset local.value &= processTags(local.matcher.group(4), local.i)>
-					</cfloop>
-				<cfelseif IsStruct(arguments.data[local.matcher.group(2)])>
-					<cfset local.value = processTags(local.matcher.group(4), arguments.data[local.matcher.group(2)])>
+		<!--- determine our current position in the template based on the innerstart of the current context --->
+		<cfset local.position = arguments.context.innerstart>
+		<cfloop array="#arguments.context.tags#" index="local.i">
+			<!--- append everything that came prior to the tag --->
+			<cfset ArrayAppend(local.return, Mid(arguments.html, local.position, local.i.start - local.position))>
+			<!--- set the position to the end of this current tag, so that the next tag will pick up everything from here to there --->
+			<cfset local.position = local.i.end>
+
+			<cfif local.i.type is "-">
+				<cfif ArrayLen(arguments.data) gt 1>
+					<cfset local.stash = arguments.data[ArrayLen(arguments.data)]>
+					<cfset ArrayDeleteAt(arguments.data, ArrayLen(arguments.data))>
+					<cfset ArrayAppend(local.return, processTags(arguments.html, local.i, arguments.data))>
+					<cfset ArrayAppend(arguments.data, local.stash)>
 				</cfif>
-			<cfelseif local.matcher.group(1) is ":" && StructKeyExists(arguments.data, local.matcher.group(2))>
+				<cfcontinue>
+			</cfif>
+
+			<cfset local.data = arguments.data[ArrayLen(arguments.data)]>
+
+			<!--- calculate the data value --->
+			<cfif StructKeyExists(local.data, local.i.label)>
+				<cfset local.temp = local.data[local.i.label]>
+			<cfelseif IsObject(local.data) && StructKeyExists(local.data, "get" & local.i.label)>
+				<!--- If working with an ORM result, we want to call the get() method on the required key --->
+				<cfinvoke component="#local.data#" method="get#local.i.label#" returnvariable="local.temp">
+			<cfelseif StructKeyExists(local, "temp")>
+				<!--- No value, and no object getter, so we need to ensure that the previous loop did not set a value --->
+				<cfset StructDelete(local, "temp")>
+			</cfif>
+			
+			<!--- Process the different types of tags --->
+			<cfif local.i.type is "" || local.i.type is "%">
+				<cfif !StructKeyExists(local, "temp")>
+					<!--- do nothing --->
+				<cfelseif IsSimpleValue(local.temp)>
+					<cfset ArrayAppend(local.return, local.i.type is "%" ? htmlEditFormat(local.temp) : local.temp)>
+				<cfelseif IsStruct(local.temp) && StructKeyExists(local.temp, "template") && StructKeyExists(local.temp, "data")>
+					<cfif IsArray(local.temp.data)>
+						<cfloop array="#local.temp.data#" index="local.j">
+							<cfset ArrayAppend(local.return, fill(local.temp.template, local.j))>
+						</cfloop>
+					<cfelse>
+						<cfset ArrayAppend(local.return, fill(local.temp.template, local.temp.data))>
+					</cfif>
+				</cfif>
+			<cfelseif local.i.type is "##">
+				<cfif StructKeyExists(local, "temp")>
+					<cfif IsArray(local.temp)>
+						<cfloop array="#local.temp#" index="local.j">
+							<cfset ArrayAppend(arguments.data, local.j)>
+							<cfset ArrayAppend(local.return, processTags(arguments.html, local.i, arguments.data))>
+							<cfset ArrayDeleteAt(arguments.data, ArrayLen(arguments.data))>
+						</cfloop>
+					<cfelseif IsStruct(local.temp) && !StructIsEmpty(local.temp)>
+						<cfset ArrayAppend(arguments.data, local.temp)>
+						<cfset ArrayAppend(local.return, processTags(arguments.html, local.i, arguments.data))>
+						<cfset ArrayDeleteAt(arguments.data, ArrayLen(arguments.data))>
+					</cfif>
+				</cfif>
+			<cfelseif local.i.type is ":">
 				<cfif 
-					(IsSimpleValue(arguments.data[local.matcher.group(2)]) && arguments.data[local.matcher.group(2)] is not "" && arguments.data[local.matcher.group(2)] is not false) 
-					||
-					(IsArray(arguments.data[local.matcher.group(2)]) && ArrayLen(arguments.data[local.matcher.group(2)]) gt 0)	
+					StructKeyExists(local, "temp") && (
+						(IsSimpleValue(local.temp) && local.temp is not "" && local.temp is not false) 
+						||
+						(IsArray(local.temp) && ArrayLen(local.temp) gt 0)
+						||
+						(IsStruct(local.temp) && !StructIsEmpty(local.temp))
+					)
 				>
-					<cfset local.value = ReReplace(local.matcher.group(0), "\{\{(:|/)" & local.matcher.group(2) & "_" & local.matcher.group(3) & "\}\}", "", "all")>
+					<cfset ArrayAppend(local.return, processTags(arguments.html, local.i, arguments.data))>
 				</cfif>
-			<cfelseif local.matcher.group(1) is "!" && (!StructKeyExists(arguments.data, local.matcher.group(2)) 
-				|| (
-					(IsSimpleValue(arguments.data[local.matcher.group(2)]) && (arguments.data[local.matcher.group(2)] is "" || arguments.data[local.matcher.group(2)] is false))
-					||
-					(IsArray(arguments.data[local.matcher.group(2)]) && ArrayLen(arguments.data[local.matcher.group(2)]) is 0)
-				))
-			>
-				<cfset local.value = ReReplace(local.matcher.group(0), "\{\{(!|/)" & local.matcher.group(2) & "_" & local.matcher.group(3) & "\}\}", "", "all")>
-			</cfif>
-		
-			<cfset local.return = Replace(local.return, local.matcher.group(0), local.value)>
-			<cfset local.matcher.reset(local.return)>
-		</cfloop>
-		
-		<!--- Fills all variable tags --->
-		<cfset local.tagRegex = CreateObject("java", "java.util.regex.Pattern").compile("\{\{(\w*?)\}\}", 32)>
-		<cfset local.matcher = local.tagRegex.matcher(local.return)>
-		
-		<cfloop condition="#local.matcher.find()#">
-			<cfset local.value = "">
-			
-			<cfif !StructKeyExists(arguments.data, local.matcher.group(1))>
-				<cfset local.value = "">
-			<cfelseif IsSimpleValue(arguments.data[local.matcher.group(1)])>
-				<cfset local.value = arguments.data[local.matcher.group(1)]>
-			<cfelseif IsStruct(arguments.data[local.matcher.group(1)]) && StructKeyExists(arguments.data[local.matcher.group(1)], "template") && StructKeyExists(arguments.data[local.matcher.group(1)], "data")>
-				<cfif IsArray(arguments.data[local.matcher.group(1)].data)>
-					<cfloop array="#arguments.data[local.matcher.group(1)].data#" index="local.i">
-						<cfset local.value &= fill(arguments.data[local.matcher.group(1)].template, local.i)>
-					</cfloop>
-				<cfelse>
-					<cfset local.value = fill(arguments.data[local.matcher.group(1)].template, arguments.data[local.matcher.group(1)].data)>
+			<cfelseif local.i.type is "!">
+				<cfif (!StructKeyExists(local, "temp")
+					|| (
+						(IsSimpleValue(local.temp) && (local.temp is "" || local.temp is false))
+						||
+						(IsArray(local.temp) && ArrayLen(local.temp) is 0)
+						||
+						(IsStruct(local.temp) && StructIsEmpty(local.temp))
+					))
+				>
+					<cfset ArrayAppend(local.return, processTags(arguments.html, local.i, arguments.data))>
 				</cfif>
 			</cfif>
-			
-			<cfset local.return = Replace(local.return, local.matcher.group(0), local.value, "all")>
 		</cfloop>
+
+		<!--- append everything that comes after all of the tags --->
+		<cfif local.position lt arguments.context.end>
+			<cfset ArrayAppend(local.return, mid(arguments.html, local.position, arguments.context.innerend - local.position))>
+		</cfif>
 		
-		<cfreturn local.return>
+		<!--- convert our array into a string --->
+		<cfreturn ArrayToList(local.return, "")>
 	</cffunction>
 	
 	<!--- Preserves a template, this is useful when passing an HTML template on to javascript, otherwise the template may be processed before it reaches javascript --->
-	<!--- goatee.unpreserve() will unpreserve the template for use --->
+	<!--- sv.templates.unpreserve() will unpreserve the template for use --->
 	<cffunction name="preserve" access="public" output="no">
 		<cfargument name="html">
 		
