@@ -202,7 +202,7 @@ There are 2 different ways that sections are processed.
 	empty string
 ````
 
-### Negative Section- {{-}} content {{/-}}
+### Negative Section (not in Mustache) - {{-}} content {{/-}}
 Negative sections allow you to access variables in the context above your current context. In example if your template has a section, while in the section, you can access variables in the scope above using a negative section.
 
 ````
